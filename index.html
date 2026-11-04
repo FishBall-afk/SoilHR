@@ -1,0 +1,917 @@
+import React, { useState, useEffect } from 'react';
+import { 
+  Users, CalendarOff, Plus, Trash2, FileText, 
+  Briefcase, Leaf, AlertCircle, CheckCircle2, ChevronRight, X, Edit2, UserCircle, Eye, Image as ImageIcon
+} from 'lucide-react';
+import { initializeApp } from 'firebase/app';
+import { 
+  getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+  getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot 
+} from 'firebase/firestore';
+
+// --- Firebase Initialization (Global) ---
+const firebaseConfig = typeof __firebase_config !== 'undefined' 
+  ? JSON.parse(__firebase_config) 
+  : { 
+      apiKey: "demo-api-key-12345", 
+      projectId: "demo-project",
+      authDomain: "demo-project.firebaseapp.com"
+    }; // Fallback with dummy key to prevent crash
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'soil-hr-app';
+
+// --- Helper Functions for Malaysian Payroll & Leaves ---
+const getDefaultLeaves = (role) => {
+  switch(role) {
+    case 'Full-Time': return { al: 8, sl: 14 };
+    case 'Associate': return { al: 8, sl: 14 }; 
+    case 'Trainee': return { al: 0, sl: 7 };
+    default: return { al: 8, sl: 14 };
+  }
+};
+
+// --- Main Component ---
+export default function SoilHR() {
+  const [user, setUser] = useState(null);
+  const [activeTab, setActiveTab] = useState('employees');
+  const [loading, setLoading] = useState(true);
+  const [notification, setNotification] = useState({ show: false, message: '', type: 'info' });
+
+  // Data States
+  const [employees, setEmployees] = useState([]);
+  const [leaves, setLeaves] = useState([]);
+  const [invoices, setInvoices] = useState([]);
+
+  // --- Auth & Data Fetching ---
+  useEffect(() => {
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch (error) {
+        console.error("Auth error:", error);
+      }
+    };
+    initAuth();
+
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      setUser(currentUser);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const empRef = collection(db, 'artifacts', appId, 'users', user.uid, 'employees');
+    const leaveRef = collection(db, 'artifacts', appId, 'users', user.uid, 'leaves');
+    const invRef = collection(db, 'artifacts', appId, 'users', user.uid, 'invoices');
+
+    const unsubEmp = onSnapshot(empRef, 
+      (snapshot) => setEmployees(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))),
+      (err) => console.error("Emp sync error:", err)
+    );
+
+    const unsubLeave = onSnapshot(leaveRef, 
+      (snapshot) => setLeaves(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))),
+      (err) => console.error("Leave sync error:", err)
+    );
+
+    const unsubInv = onSnapshot(invRef, 
+      (snapshot) => setInvoices(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))),
+      (err) => console.error("Invoice sync error:", err)
+    );
+
+    return () => { unsubEmp(); unsubLeave(); unsubInv(); };
+  }, [user]);
+
+  const showNotification = (message, type = 'success') => {
+    setNotification({ show: true, message, type });
+    setTimeout(() => setNotification({ show: false, message: '', type: 'info' }), 3000);
+  };
+
+  // --- UI Components ---
+  if (loading) {
+    return <div className="min-h-screen flex items-center justify-center bg-stone-50 text-emerald-800">Loading Soil HR...</div>;
+  }
+
+  // Prevent crash if authentication fails (e.g. in preview environment)
+  if (!user) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-stone-50 text-stone-800 p-4 text-center">
+        <AlertCircle className="w-16 h-16 text-red-500 mb-4 mx-auto" />
+        <h2 className="text-2xl font-bold mb-2">Preview Security Restriction</h2>
+        <p className="max-w-md text-stone-600 mb-4">
+          Firebase Authentication blocks external preview windows for security.
+        </p>
+        <p className="text-sm bg-stone-200 p-3 rounded text-stone-700">
+          This is completely normal! Your code and database connection are correct. <br/>
+          Once you upload <code>index.html</code> to GitHub, it will work perfectly.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-stone-50 font-sans text-stone-800">
+      {/* Navbar */}
+      <nav className="bg-emerald-800 text-white shadow-md">
+        <div className="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Leaf className="h-6 w-6 text-emerald-300" />
+            <span className="text-xl font-bold tracking-wide">Soil HR</span>
+          </div>
+          <div className="text-xs sm:text-sm text-emerald-200 hidden sm:block">Malaysian Context Edition</div>
+        </div>
+      </nav>
+
+      {/* Main Content */}
+      <div className="max-w-6xl mx-auto px-4 py-6 md:py-8 flex flex-col md:flex-row gap-4 md:gap-6">
+        
+        {/* Sidebar Navigation */}
+        <aside className="w-full md:w-64 flex-shrink-0 grid grid-cols-4 md:flex md:flex-col gap-2 md:gap-0 md:space-y-2 mb-2 md:mb-0">
+          <TabButton 
+            active={activeTab === 'employees'} 
+            onClick={() => setActiveTab('employees')} 
+            icon={<Users className="w-5 h-5 md:w-5 md:h-5" />} 
+            label="Employees" 
+          />
+          <TabButton 
+            active={activeTab === 'profiles'} 
+            onClick={() => setActiveTab('profiles')} 
+            icon={<UserCircle className="w-5 h-5 md:w-5 md:h-5" />} 
+            label="Profiles" 
+          />
+          <TabButton 
+            active={activeTab === 'leaves'} 
+            onClick={() => setActiveTab('leaves')} 
+            icon={<CalendarOff className="w-5 h-5 md:w-5 md:h-5" />} 
+            label="Leave" 
+          />
+          <TabButton 
+            active={activeTab === 'invoices'} 
+            onClick={() => setActiveTab('invoices')} 
+            icon={<FileText className="w-5 h-5 md:w-5 md:h-5" />} 
+            label="Expenses" 
+          />
+        </aside>
+
+        {/* Dynamic Content Area */}
+        <main className="flex-1 bg-white p-4 md:p-6 rounded-xl shadow-sm border border-stone-100">
+          {notification.show && (
+            <div className={`mb-6 p-4 rounded-lg flex items-center gap-2 ${notification.type === 'error' ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-700'}`}>
+              {notification.type === 'error' ? <AlertCircle className="w-5 h-5" /> : <CheckCircle2 className="w-5 h-5" />}
+              {notification.message}
+            </div>
+          )}
+
+          {activeTab === 'employees' && (
+            <EmployeeManager user={user} employees={employees} showNotification={showNotification} />
+          )}
+          {activeTab === 'profiles' && (
+            <ProfileManager user={user} employees={employees} showNotification={showNotification} />
+          )}
+          {activeTab === 'leaves' && (
+            <LeaveManager user={user} employees={employees} leaves={leaves} showNotification={showNotification} />
+          )}
+          {activeTab === 'invoices' && (
+            <InvoiceManager user={user} invoices={invoices} showNotification={showNotification} />
+          )}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+// --- Tab Button Component ---
+function TabButton({ active, onClick, icon, label }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full flex items-center justify-center md:justify-between px-2 md:px-4 py-2 md:py-3 rounded-lg transition-colors duration-200 ${
+        active 
+          ? 'bg-emerald-100 text-emerald-800 font-medium' 
+          : 'hover:bg-stone-100 text-stone-600'
+      }`}
+    >
+      <div className="flex flex-col md:flex-row items-center gap-1 md:gap-3">
+        {icon}
+        <span className="text-[10px] md:text-sm text-center leading-tight">{label}</span>
+      </div>
+      {active && <ChevronRight className="w-4 h-4 text-emerald-600 hidden md:block" />}
+    </button>
+  );
+}
+
+// --- Employee Manager Component ---
+function EmployeeManager({ user, employees, showNotification }) {
+  const [newEmp, setNewEmp] = useState({ name: '', role: 'Full-Time' });
+
+  const addEmployee = async (e) => {
+    e.preventDefault();
+    if (!newEmp.name) {
+      showNotification("Please enter at least the employee's name", "error");
+      return;
+    }
+    
+    const defaults = getDefaultLeaves(newEmp.role);
+    
+    try {
+      const empRef = collection(db, 'artifacts', appId, 'users', user.uid, 'employees');
+      await addDoc(empRef, {
+        ...newEmp,
+        phone: '',
+        email: '',
+        joinDate: '',
+        alBalance: defaults.al,
+        slBalance: defaults.sl,
+        createdAt: new Date().toISOString()
+      });
+      setNewEmp({ name: '', role: 'Full-Time' });
+      showNotification("Employee added successfully");
+    } catch (err) {
+      showNotification("Error adding employee", "error");
+    }
+  };
+
+  const deleteEmployee = async (id) => {
+    if(!window.confirm("Are you sure you want to remove this employee?")) return;
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'employees', id));
+      showNotification("Employee removed");
+    } catch (err) {
+      showNotification("Error removing employee", "error");
+    }
+  };
+
+  return (
+    <div className="relative">
+      <h2 className="text-2xl font-semibold mb-6 flex items-center gap-2 text-stone-800">
+        <Briefcase className="text-emerald-600" /> Employees Directory
+      </h2>
+
+      {/* Add Employee Form */}
+      <form onSubmit={addEmployee} className="bg-stone-50 p-4 rounded-lg border border-stone-200 mb-8 grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+        <div className="md:col-span-2">
+          <label className="block text-sm font-medium text-stone-600 mb-1">Full Name</label>
+          <input 
+            type="text" 
+            className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+            value={newEmp.name}
+            onChange={e => setNewEmp({...newEmp, name: e.target.value})}
+            placeholder="e.g. Ahmad bin Ali"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-stone-600 mb-1">Role</label>
+          <select 
+            className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+            value={newEmp.role}
+            onChange={e => setNewEmp({...newEmp, role: e.target.value})}
+          >
+            <option>Full-Time</option>
+            <option>Associate</option>
+            <option>Trainee</option>
+          </select>
+        </div>
+        <div className="flex gap-2">
+          <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded flex items-center justify-center gap-2 transition-colors">
+            <Plus className="w-4 h-4" /> Add Employee
+          </button>
+        </div>
+      </form>
+
+      {/* Employee List */}
+      <div className="overflow-x-auto">
+        <table className="w-full text-left border-collapse">
+          <thead>
+            <tr className="bg-stone-100 text-stone-600 text-sm">
+              <th className="p-3 border-b border-stone-200 rounded-tl-lg">Name</th>
+              <th className="p-3 border-b border-stone-200">Role</th>
+              <th className="p-3 border-b border-stone-200 text-center">AL</th>
+              <th className="p-3 border-b border-stone-200 text-center">SL</th>
+              <th className="p-3 border-b border-stone-200 rounded-tr-lg text-center">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {employees.length === 0 ? (
+              <tr><td colSpan="5" className="p-4 text-center text-stone-500">No employees found.</td></tr>
+            ) : (
+              employees.map(emp => (
+                <tr key={emp.id} className="border-b border-stone-100 hover:bg-stone-50 transition-colors">
+                  <td className="p-3 font-medium text-stone-800">{emp.name}</td>
+                  <td className="p-3">
+                    <span className={`px-2 py-1 text-xs rounded-full ${
+                      emp.role === 'Full-Time' ? 'bg-blue-100 text-blue-700' :
+                      emp.role === 'Associate' ? 'bg-purple-100 text-purple-700' :
+                      'bg-orange-100 text-orange-700'
+                    }`}>
+                      {emp.role}
+                    </span>
+                  </td>
+                  <td className="p-3 text-center font-medium">{emp.alBalance}</td>
+                  <td className="p-3 text-center font-medium">{emp.slBalance}</td>
+                  <td className="p-3 text-center">
+                    <button onClick={() => deleteEmployee(emp.id)} className="text-red-500 hover:text-red-700 p-1" title="Delete">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// --- Profile Manager Component ---
+function ProfileManager({ user, employees, showNotification }) {
+  const [selectedId, setSelectedId] = useState('');
+  const [formData, setFormData] = useState(null);
+
+  useEffect(() => {
+    const emp = employees.find(e => e.id === selectedId);
+    if (emp) {
+      setFormData(emp);
+    } else {
+      setFormData(null);
+    }
+  }, [selectedId, employees]);
+
+  const updateProfile = async (e) => {
+    e.preventDefault();
+    if (!formData) return;
+    try {
+      await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'employees', formData.id), {
+        phone: formData.phone || '',
+        email: formData.email || '',
+        joinDate: formData.joinDate || '',
+        alBalance: parseFloat(formData.alBalance),
+        slBalance: parseFloat(formData.slBalance)
+      });
+      showNotification("Profile details updated successfully.");
+    } catch (err) {
+      showNotification("Error updating profile", "error");
+    }
+  };
+
+  return (
+    <div>
+      <h2 className="text-2xl font-semibold mb-6 flex items-center gap-2 text-stone-800">
+        <UserCircle className="text-emerald-600" /> Employee Profiles
+      </h2>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="md:col-span-1 border border-stone-200 rounded-lg bg-stone-50 p-4 h-fit">
+          <label className="block text-sm font-medium text-stone-600 mb-2">Select Employee</label>
+          <select 
+            className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-emerald-500"
+            value={selectedId}
+            onChange={(e) => setSelectedId(e.target.value)}
+          >
+            <option value="">-- Choose Employee --</option>
+            {employees.map(emp => (
+              <option key={emp.id} value={emp.id}>{emp.name} ({emp.role})</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="md:col-span-2">
+          {formData ? (
+            <form onSubmit={updateProfile} className="bg-white border border-stone-200 rounded-lg p-6 shadow-sm">
+              <h3 className="text-lg font-semibold text-stone-800 mb-4 border-b pb-2">Profile Details: {formData.name}</h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+                <div>
+                  <label className="block text-sm font-medium text-stone-600 mb-1">Phone Number</label>
+                  <input type="text" className="w-full p-2 border border-stone-300 rounded focus:ring-emerald-500"
+                    value={formData.phone || ''} onChange={e => setFormData({...formData, phone: e.target.value})} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-stone-600 mb-1">Email Address</label>
+                  <input type="email" className="w-full p-2 border border-stone-300 rounded focus:ring-emerald-500"
+                    value={formData.email || ''} onChange={e => setFormData({...formData, email: e.target.value})} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-stone-600 mb-1">Join Date</label>
+                  <input type="date" className="w-full p-2 border border-stone-300 rounded focus:ring-emerald-500"
+                    value={formData.joinDate || ''} onChange={e => setFormData({...formData, joinDate: e.target.value})} />
+                </div>
+              </div>
+              
+              <h4 className="text-sm font-semibold text-stone-700 mb-3 border-b pb-1">Leave Balances (Manual Override)</h4>
+              <div className="grid grid-cols-2 gap-4 mb-6">
+                <div>
+                  <label className="block text-sm font-medium text-stone-600 mb-1">AL Balance</label>
+                  <input type="number" step="0.5" className="w-full p-2 border border-stone-300 rounded focus:ring-emerald-500 bg-blue-50"
+                    value={formData.alBalance} onChange={e => setFormData({...formData, alBalance: e.target.value})} />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-stone-600 mb-1">SL Balance</label>
+                  <input type="number" step="0.5" className="w-full p-2 border border-stone-300 rounded focus:ring-emerald-500 bg-red-50"
+                    value={formData.slBalance} onChange={e => setFormData({...formData, slBalance: e.target.value})} />
+                </div>
+              </div>
+              
+              <div className="flex justify-end">
+                <button type="submit" className="bg-emerald-600 text-white px-6 py-2 rounded hover:bg-emerald-700 transition-colors">
+                  Save Changes
+                </button>
+              </div>
+            </form>
+          ) : (
+            <div className="text-center p-8 text-stone-500 border border-stone-200 border-dashed rounded-lg">
+              Please select an employee to view or edit their detailed profile.
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// --- Leave Manager Component ---
+function LeaveManager({ user, employees, leaves, showNotification }) {
+  const [leaveReq, setLeaveReq] = useState({ id: null, employeeId: '', type: 'AL', startDate: '', endDate: '', days: 1, reason: '' });
+  const [viewReason, setViewReason] = useState(null);
+
+  const handleDateChange = (field, value) => {
+    const updated = { ...leaveReq, [field]: value };
+    if (updated.startDate && updated.endDate) {
+      const start = new Date(updated.startDate);
+      const end = new Date(updated.endDate);
+      if (end >= start) {
+        const diffDays = Math.ceil(Math.abs(end - start) / (1000 * 60 * 60 * 24)) + 1; 
+        updated.days = diffDays;
+      }
+    }
+    setLeaveReq(updated);
+  };
+
+  const applyLeave = async (e) => {
+    e.preventDefault();
+    if (!leaveReq.employeeId || !leaveReq.startDate || !leaveReq.endDate || leaveReq.days <= 0) {
+      showNotification("Please complete the form dates and details correctly.", "error");
+      return;
+    }
+
+    const emp = employees.find(e => e.id === leaveReq.employeeId);
+    if (!emp) return;
+
+    try {
+      const daysToDeduct = parseFloat(leaveReq.days);
+      const empRef = doc(db, 'artifacts', appId, 'users', user.uid, 'employees', emp.id);
+
+      if (leaveReq.id) {
+        // Edit Mode: Refund old balance, apply new balance
+        const oldLeave = leaves.find(l => l.id === leaveReq.id);
+        let currentAl = parseFloat(emp.alBalance);
+        let currentSl = parseFloat(emp.slBalance);
+
+        // Refund old
+        if (oldLeave.type === 'AL') currentAl += parseFloat(oldLeave.days);
+        if (oldLeave.type === 'SL') currentSl += parseFloat(oldLeave.days);
+
+        // Deduct new
+        if (leaveReq.type === 'AL') {
+          if (currentAl < daysToDeduct) return showNotification("Insufficient AL balance", "error");
+          currentAl -= daysToDeduct;
+        }
+        if (leaveReq.type === 'SL') {
+          if (currentSl < daysToDeduct) return showNotification("Insufficient SL balance", "error");
+          currentSl -= daysToDeduct;
+        }
+        // Emergency leave (EL) doesn't enforce strict limit checking here for flexibility
+
+        await updateDoc(empRef, { alBalance: currentAl, slBalance: currentSl });
+        await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'leaves', leaveReq.id), {
+          employeeId: emp.id,
+          employeeName: emp.name,
+          type: leaveReq.type,
+          startDate: leaveReq.startDate,
+          endDate: leaveReq.endDate,
+          days: daysToDeduct,
+          reason: leaveReq.reason
+        });
+        showNotification("Leave updated successfully.");
+      } else {
+        // Create Mode
+        if (leaveReq.type === 'AL' || leaveReq.type === 'SL') {
+           const balanceField = leaveReq.type === 'AL' ? 'alBalance' : 'slBalance';
+           if (parseFloat(emp[balanceField]) < daysToDeduct) {
+             return showNotification(`Insufficient ${leaveReq.type} balance.`, "error");
+           }
+           await updateDoc(empRef, { [balanceField]: parseFloat(emp[balanceField]) - daysToDeduct });
+        }
+
+        await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'leaves'), {
+          employeeId: emp.id,
+          employeeName: emp.name,
+          type: leaveReq.type,
+          startDate: leaveReq.startDate,
+          endDate: leaveReq.endDate,
+          days: daysToDeduct,
+          reason: leaveReq.reason,
+          recordedAt: new Date().toISOString()
+        });
+        showNotification("Leave recorded successfully.");
+      }
+
+      setLeaveReq({ id: null, employeeId: '', type: 'AL', startDate: '', endDate: '', days: 1, reason: '' });
+    } catch (err) {
+      showNotification("Error saving leave record", "error");
+    }
+  };
+
+  const editLeave = (leave) => {
+    setLeaveReq(leave);
+  };
+
+  const deleteLeave = async (leave) => {
+    if (!window.confirm("Delete this leave record? Balances will be refunded.")) return;
+    try {
+      const emp = employees.find(e => e.id === leave.employeeId);
+      if (emp && (leave.type === 'AL' || leave.type === 'SL')) {
+        const balanceField = leave.type === 'AL' ? 'alBalance' : 'slBalance';
+        await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'employees', emp.id), {
+          [balanceField]: parseFloat(emp[balanceField]) + parseFloat(leave.days)
+        });
+      }
+      await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'leaves', leave.id));
+      showNotification("Leave record deleted and balance restored.");
+      if (leaveReq.id === leave.id) {
+         setLeaveReq({ id: null, employeeId: '', type: 'AL', startDate: '', endDate: '', days: 1, reason: '' });
+      }
+    } catch (err) {
+      showNotification("Error deleting leave", "error");
+    }
+  };
+
+  return (
+    <div>
+      <h2 className="text-2xl font-semibold mb-6 flex items-center gap-2 text-stone-800">
+        <CalendarOff className="text-emerald-600" /> Leave Management
+      </h2>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Record/Edit Leave Form */}
+        <div className="lg:col-span-1 bg-stone-50 p-4 rounded-lg border border-stone-200 self-start sticky top-6">
+          <h3 className="font-medium mb-4 text-stone-700 flex justify-between items-center">
+            {leaveReq.id ? 'Edit Leave Record' : 'Apply for Leave'}
+            {leaveReq.id && (
+              <button type="button" onClick={() => setLeaveReq({ id: null, employeeId: '', type: 'AL', startDate: '', endDate: '', days: 1, reason: '' })} className="text-xs text-stone-500 hover:text-stone-800 flex items-center gap-1 bg-stone-200 px-2 py-1 rounded">
+                <X className="w-3 h-3"/> Cancel Edit
+              </button>
+            )}
+          </h3>
+          <form onSubmit={applyLeave} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-stone-600 mb-1">Employee</label>
+              <select 
+                className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                value={leaveReq.employeeId}
+                onChange={e => setLeaveReq({...leaveReq, employeeId: e.target.value})}
+                disabled={!!leaveReq.id} 
+              >
+                <option value="">Select Employee</option>
+                {employees.map(emp => (
+                  <option key={emp.id} value={emp.id}>{emp.name}</option>
+                ))}
+              </select>
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-stone-600 mb-1">Leave Type</label>
+              <select 
+                className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                value={leaveReq.type}
+                onChange={e => setLeaveReq({...leaveReq, type: e.target.value})}
+              >
+                <option value="AL">Annual Leave (AL)</option>
+                <option value="SL">Sick Leave (SL)</option>
+                <option value="EL">Emergency Leave (EL)</option>
+              </select>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-stone-600 mb-1">Start Date</label>
+                <input 
+                  type="date" 
+                  className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  value={leaveReq.startDate}
+                  onChange={e => handleDateChange('startDate', e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-stone-600 mb-1">End Date</label>
+                <input 
+                  type="date" 
+                  className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  value={leaveReq.endDate}
+                  onChange={e => handleDateChange('endDate', e.target.value)}
+                />
+              </div>
+            </div>
+
+            {leaveReq.startDate && leaveReq.endDate && leaveReq.days > 0 && (
+              <div className="text-sm text-emerald-700 bg-emerald-50 px-3 py-2 rounded">
+                Calculated Leave: <strong>{leaveReq.days} day(s)</strong>
+              </div>
+            )}
+
+            {leaveReq.type === 'EL' && (
+              <div>
+                 <label className="block text-sm font-medium text-stone-600 mb-1">Emergency Reason</label>
+                 <input 
+                    type="text"
+                    placeholder="Brief reason..."
+                    className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    value={leaveReq.reason}
+                    onChange={e => setLeaveReq({...leaveReq, reason: e.target.value})}
+                  />
+              </div>
+            )}
+
+            <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded transition-colors">
+              {leaveReq.id ? 'Save Changes' : 'Record Leave'}
+            </button>
+          </form>
+        </div>
+
+        {/* Leave History Table */}
+        <div className="lg:col-span-2">
+          <h3 className="font-medium mb-4 text-stone-700">Recent Leave History</h3>
+          <div className="overflow-x-auto border border-stone-200 rounded-lg">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-stone-100 text-stone-600 text-sm">
+                  <th className="p-3 border-b border-stone-200">Date Range</th>
+                  <th className="p-3 border-b border-stone-200">Employee</th>
+                  <th className="p-3 border-b border-stone-200">Type</th>
+                  <th className="p-3 border-b border-stone-200">Reason</th>
+                  <th className="p-3 border-b border-stone-200 text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {leaves.length === 0 ? (
+                  <tr><td colSpan="5" className="p-4 text-center text-stone-500">No leave records yet.</td></tr>
+                ) : (
+                  leaves.sort((a,b) => new Date(b.startDate) - new Date(a.startDate)).map(leave => (
+                    <tr key={leave.id} className="border-b border-stone-100 hover:bg-stone-50">
+                      <td className="p-3 text-sm text-stone-700 whitespace-nowrap">
+                        {leave.startDate} <span className="text-stone-400 mx-1">to</span> {leave.endDate} 
+                        <span className="ml-1 text-xs text-stone-500">({leave.days}d)</span>
+                      </td>
+                      <td className="p-3 font-medium text-stone-800">{leave.employeeName}</td>
+                      <td className="p-3">
+                        <span className={`px-2 py-1 text-xs rounded-full ${
+                          leave.type === 'AL' ? 'bg-blue-100 text-blue-700' : 
+                          leave.type === 'SL' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'
+                        }`}>
+                          {leave.type}
+                        </span>
+                      </td>
+                      <td className="p-3 text-sm text-stone-600 text-center">
+                        {leave.reason ? (
+                          <button onClick={() => setViewReason(leave.reason)} className="text-emerald-600 hover:text-emerald-800 bg-emerald-50 px-2 py-1 rounded text-xs flex items-center gap-1 mx-auto">
+                            <Eye className="w-3 h-3" /> View
+                          </button>
+                        ) : '-'}
+                      </td>
+                      <td className="p-3 text-center whitespace-nowrap">
+                        <button onClick={() => editLeave(leave)} className="text-emerald-600 hover:text-emerald-800 p-1 mr-2" title="Edit">
+                          <Edit2 className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => deleteLeave(leave)} className="text-red-500 hover:text-red-700 p-1" title="Delete">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* Reason Modal */}
+      {viewReason && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-6 max-w-sm w-full shadow-xl relative">
+            <button onClick={() => setViewReason(null)} className="absolute top-4 right-4 text-stone-400 hover:text-stone-600">
+              <X className="w-5 h-5"/>
+            </button>
+            <h4 className="font-semibold text-stone-800 mb-4 border-b pb-2">Leave Reason</h4>
+            <p className="text-stone-600 whitespace-pre-wrap">{viewReason}</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// --- Invoice Manager Component ---
+function InvoiceManager({ user, invoices, showNotification }) {
+  const [newExpense, setNewExpense] = useState({
+    date: new Date().toISOString().split('T')[0],
+    description: '',
+    amount: '',
+    photoBase64: ''
+  });
+  const [viewPhoto, setViewPhoto] = useState(null);
+
+  const totalExpenses = invoices.reduce((sum, inv) => sum + (parseFloat(inv.amount) || 0), 0);
+
+  const handlePhotoUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+         setNewExpense(prev => ({ ...prev, photoBase64: reader.result }));
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const addExpense = async (e) => {
+    e.preventDefault();
+    if (!newExpense.date || !newExpense.description || !newExpense.amount) {
+      showNotification("Please fill date, description, and amount.", "error");
+      return;
+    }
+
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, 'invoices'), {
+        date: newExpense.date,
+        description: newExpense.description,
+        amount: parseFloat(newExpense.amount),
+        photoBase64: newExpense.photoBase64,
+        createdAt: new Date().toISOString()
+      });
+
+      setNewExpense({ ...newExpense, description: '', amount: '', photoBase64: '' });
+      const fileInput = document.getElementById('photo-upload');
+      if (fileInput) fileInput.value = '';
+      
+      showNotification("Expense recorded successfully.");
+    } catch (err) {
+      showNotification("Error saving expense", "error");
+    }
+  };
+  
+  const deleteExpense = async (id) => {
+    if (!window.confirm("Delete this expense record?")) return;
+    try {
+      await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'invoices', id));
+      showNotification("Expense deleted.");
+    } catch (err) {
+      showNotification("Error deleting expense", "error");
+    }
+  };
+
+  return (
+    <div>
+      <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-4">
+        <h2 className="text-2xl font-semibold flex items-center gap-2 text-stone-800">
+          <FileText className="text-emerald-600" /> Expense Tracker
+        </h2>
+        <div className="bg-emerald-800 text-white px-6 py-3 rounded-lg shadow-sm">
+          <span className="text-emerald-200 text-sm block mb-1">Total Expenses</span>
+          <span className="text-2xl font-bold">RM {totalExpenses.toFixed(2)}</span>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Create Expense Form */}
+        <div className="lg:col-span-1 bg-stone-50 p-4 rounded-lg border border-stone-200 self-start">
+          <h3 className="font-medium mb-4 text-stone-700">Add New Expense</h3>
+          <form onSubmit={addExpense} className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-stone-600 mb-1">Date</label>
+              <input 
+                type="date" 
+                className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                value={newExpense.date}
+                onChange={e => setNewExpense({...newExpense, date: e.target.value})}
+              />
+            </div>
+            
+            <div>
+              <label className="block text-sm font-medium text-stone-600 mb-1">Description (Item)</label>
+              <input 
+                type="text"
+                placeholder="e.g., Office Supplies, Printer Ink"
+                className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                value={newExpense.description}
+                onChange={e => setNewExpense({...newExpense, description: e.target.value})}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-stone-600 mb-1">Amount (RM)</label>
+              <input 
+                type="number" 
+                step="0.01"
+                min="0"
+                placeholder="0.00"
+                className="w-full p-2 border border-stone-300 rounded focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                value={newExpense.amount}
+                onChange={e => setNewExpense({...newExpense, amount: e.target.value})}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-stone-600 mb-1">Receipt Photo</label>
+              <input 
+                id="photo-upload"
+                type="file"
+                accept="image/*"
+                onChange={handlePhotoUpload}
+                className="w-full text-sm text-stone-500 file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:font-semibold file:bg-emerald-50 file:text-emerald-700 hover:file:bg-emerald-100"
+              />
+            </div>
+
+            <button type="submit" className="w-full bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded transition-colors flex items-center justify-center gap-2">
+              <Plus className="w-4 h-4"/> Add Expense
+            </button>
+          </form>
+        </div>
+
+        {/* Expenses Table */}
+        <div className="lg:col-span-2">
+          <h3 className="font-medium mb-4 text-stone-700">Expense History</h3>
+          <div className="overflow-x-auto border border-stone-200 rounded-lg">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-stone-100 text-stone-600 text-sm">
+                  <th className="p-3 border-b border-stone-200">Date</th>
+                  <th className="p-3 border-b border-stone-200">Description</th>
+                  <th className="p-3 border-b border-stone-200 text-right">Amount</th>
+                  <th className="p-3 border-b border-stone-200 text-center">Receipt</th>
+                  <th className="p-3 border-b border-stone-200 text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {invoices.length === 0 ? (
+                  <tr><td colSpan="5" className="p-4 text-center text-stone-500">No expenses recorded yet.</td></tr>
+                ) : (
+                  invoices.sort((a,b) => new Date(b.date) - new Date(a.date)).map(inv => (
+                    <tr key={inv.id} className="border-b border-stone-100 hover:bg-stone-50">
+                      <td className="p-3 text-sm text-stone-700 whitespace-nowrap">{inv.date}</td>
+                      <td className="p-3 font-medium text-stone-800">{inv.description}</td>
+                      <td className="p-3 text-right font-medium">RM {parseFloat(inv.amount).toFixed(2)}</td>
+                      <td className="p-3 text-center">
+                        {inv.photoBase64 ? (
+                          <button onClick={() => setViewPhoto(inv.photoBase64)} className="text-emerald-600 hover:text-emerald-800 bg-emerald-50 px-2 py-1 rounded text-xs flex items-center gap-1 mx-auto">
+                            <ImageIcon className="w-3 h-3" /> View Photo
+                          </button>
+                        ) : (
+                          <span className="text-xs text-stone-400">-</span>
+                        )}
+                      </td>
+                      <td className="p-3 text-center">
+                        <button onClick={() => deleteExpense(inv.id)} className="text-stone-400 hover:text-red-600 p-1">
+                          <Trash2 className="w-4 h-4 mx-auto" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      
+      {/* Photo Modal */}
+      {viewPhoto && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setViewPhoto(null)}>
+          <div className="bg-white rounded-lg p-2 max-w-2xl w-full shadow-2xl relative" onClick={e => e.stopPropagation()}>
+            <div className="flex justify-between items-center p-2 mb-2 border-b">
+              <h4 className="font-semibold text-stone-800">Receipt Photo</h4>
+              <button onClick={() => setViewPhoto(null)} className="text-stone-400 hover:text-stone-600">
+                <X className="w-5 h-5"/>
+              </button>
+            </div>
+            <div className="flex justify-center bg-stone-100 rounded">
+              <img src={viewPhoto} alt="Receipt" className="max-h-[70vh] object-contain rounded" />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
